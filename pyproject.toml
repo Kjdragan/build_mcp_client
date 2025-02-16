@@ -1,0 +1,23 @@
+[project]
+name = "build-mcp-client"
+version = "0.1.0"
+description = "Multi-capable MCP client with Tavily search and Supabase integration"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [
+    { name = "Kevin Dragan", email = "kevin.dragan@outlook.com" }
+]
+dependencies = [
+    "mcp[cli]",
+    "anthropic",
+    "supabase",
+    "python-dotenv",
+    "httpx"
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
