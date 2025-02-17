@@ -6,7 +6,7 @@ Building an LLM-orchestrated MCP client that integrates with Tavily search and S
 
 ## Build Plan
 
-### Phase 1: Initial Setup and Core Infrastructure ✓
+### Phase 1: Initial Setup and Core Infrastructure 
 - [x] Project structure established
 - [x] Environment configuration
 - [x] Basic MCP client implementation
@@ -59,6 +59,66 @@ Building an LLM-orchestrated MCP client that integrates with Tavily search and S
    - Implementing documentation-driven development
    - Maintaining clear record of decisions and lessons
 
+### Day 1 (2025-02-17) Continued
+
+#### Async/Sync Integration Challenges
+1. **Issue**: Anthropic API Message Object Awaiting
+   ```
+   object Message can't be used in 'await' expression
+   ```
+   - **Root Cause**: Attempting to await synchronous Message objects returned by Anthropic client
+   - **Solution**: Wrapped API calls in `asyncio.to_thread` with lambda functions
+   - **Best Practice**: When integrating sync APIs in async code, always use proper thread offloading
+
+2. **Issue**: Supabase Client Sync/Async Mismatch
+   ```
+   'SyncRequestBuilder' object has no attribute 'execute'
+   ```
+   - **Root Cause**: Attempting to use await with synchronous Supabase client methods
+   - **Solution**: 
+     - Wrapped all Supabase operations in `asyncio.to_thread`
+     - Used `asyncio.gather` for parallel operations
+     - Maintained async interface while handling sync operations internally
+   - **Best Practice**: Carefully check API client async support and wrap accordingly
+
+#### Code Patterns Implemented
+
+1. **Anthropic API Integration Pattern**
+```python
+# Proper async wrapping of synchronous API calls
+response = await asyncio.to_thread(lambda: self.client.messages.create(
+    model="claude-3-opus-20240229",
+    max_tokens=1000,
+    messages=[{...}]
+))
+```
+
+2. **Supabase Operations Pattern**
+```python
+# Parallel table verification with proper sync handling
+await asyncio.gather(
+    asyncio.to_thread(lambda: self.client.table('sessions').select("id").limit(1).execute()),
+    asyncio.to_thread(lambda: self.client.table('research').select("id").limit(1).execute()),
+    asyncio.to_thread(lambda: self.client.table('capabilities').select("id").limit(1).execute())
+)
+```
+
+#### Best Practices Refined
+1. **API Integration**
+   - Always check if API client is async-native
+   - Use `asyncio.to_thread` for synchronous operations
+   - Wrap operations in lambdas to ensure proper execution
+
+2. **Database Operations**
+   - Keep async interface for consistency
+   - Use proper error handling for database operations
+   - Implement parallel operations where beneficial
+
+3. **Error Handling**
+   - Add specific error messages for sync/async mismatches
+   - Maintain proper error propagation
+   - Log detailed error context for debugging
+
 ### Technical Insights
 
 #### MCP Client Implementation
@@ -102,6 +162,12 @@ async def cleanup(self):
    - **Context**: Debug complex integrations
    - **Consequence**: Better troubleshooting
    - **Trade-off**: Performance impact vs. observability
+
+3. **Decision**: Maintain Async Interface with Sync Clients
+   - **Context**: Need to integrate sync clients (Anthropic, Supabase) in async application
+   - **Consequence**: Additional complexity in operation wrapping
+   - **Benefit**: Consistent async interface throughout application
+   - **Implementation**: Use of `asyncio.to_thread` and lambda wrapping
 
 ### Database Integration
 1. **Decision**: Use Supabase for storage
@@ -181,247 +247,3 @@ When adding to this documentation:
 2. [Tavily API Documentation](https://docs.tavily.com)
 3. [Supabase Documentation](https://supabase.com/docs)
 4. [Anthropic Claude Documentation](https://docs.anthropic.com)
-
-
-
-Lessons Learned
-Day 1 (2025-02-17)
-[Previous lessons remain the same...]
-Day 2 (2025-02-17 - Later)
-Code Organization Lessons
-
-Import Structure Issues
-
-Issue: Client was trying to import Config class that didn't exist
-
-pythonCopy# Incorrect:
-from .config import Config  # Config didn't exist
-
-Solution: Created proper Config class and reorganized code structure
-Best Practice: Define clear class responsibilities and maintain single source of truth
-
-
-Configuration Management
-
-Implemented configuration using dataclass for type safety
-Centralized all configuration in dedicated config.py
-Added validation for required environment variables
-Learning: Configuration needs to be self-contained and validated early
-
-
-Project Structure Improvements
-Copybuild_mcp_client/
-├── .env                 # Environment configuration
-├── _logs/              # Logging directory
-├── _data/              # Data storage
-├── docs/               # Documentation
-└── src/
-    └── build_mcp_client/
-        ├── __init__.py
-        ├── client.py   # MCP client implementation
-        ├── config.py   # Configuration management
-        ├── console.py  # Console interface
-        └── ...
-
-Error Handling Strategy
-
-Added comprehensive error handling in Config class
-Implemented proper cleanup in client
-Added logging throughout the codebase
-Learning: Error handling needs to be consistent and informative
-
-
-
-Technical Insights
-
-Configuration Pattern
-
-pythonCopy@dataclass
-class Config:
-    """Configuration settings for the MCP client."""
-    anthropic_api_key: str
-    supabase_url: str
-    supabase_key: str
-    tavily_api_key: str
-    
-    @classmethod
-    def load_from_env(cls) -> 'Config':
-        # Centralized environment loading
-
-Learning: Using dataclasses provides better type safety and self-documentation
-
-
-Client Initialization
-
-pythonCopyasync def initialize(self) -> bool:
-    try:
-        # Validate configuration first
-        self.config.validate()
-        # Then connect to services
-        await self.connect_to_tavily()
-        return True
-    except Exception as e:
-        logger.error(f"Failed to initialize: {e}")
-        raise
-
-Learning: Initialization should be sequential and validate prerequisites
-
-Best Practices Identified
-
-Code Organization
-
-Keep related functionality together
-Use clear class and file naming
-Maintain single responsibility principle
-
-
-Configuration Management
-
-Centralize configuration
-Validate early
-Use type hints
-Provide clear error messages
-
-
-Error Handling
-
-Log errors with context
-Clean up resources properly
-Use specific exception types
-Provide meaningful error messages
-
-
-
-Questions to Address
-
-How should we handle MCP server reconnection scenarios?
-What's the best way to manage long-running research sessions?
-How should we implement proper rate limiting for API calls?
-What metrics should we track for monitoring system health?
-
-Next Implementation Goals
-
-Add reconnection logic for MCP server
-Implement session persistence
-Add rate limiting for API calls
-Enhance logging with more context
-Add monitoring capabilities
-
-Technical Debt Identified
-
-Need to add proper test coverage
-Should implement connection pooling for database
-Need to add proper API documentation
-Should implement proper CI/CD pipeline
-
-Required Documentation Updates
-
-Add API documentation for client methods
-Create developer setup guide
-Add configuration reference
-Create troubleshooting guide
-
-Contributing
-When adding to this documentation:
-
-Add date stamps to all entries
-Include code examples where relevant
-Document both successes and failures
-Update status of build plan items
-Add context for technical decisions
-
-
-
-Major Architecture Insight: Dynamic Capability Discovery
-
-Initial Problem:
-
-Original implementation was hardcoded to specific tools (e.g., Tavily)
-Assumed presence of specific capabilities
-Not truly MCP-compliant
-
-
-Key Learning:
-
-MCP requires dynamic capability discovery
-No assumptions about available tools/resources
-LLM should plan based on discovered capabilities
-
-
-Implementation Changes:
-pythonCopy# Before - Hardcoded approach
-async def search(self, query: str):
-    result = await self.client.execute_tool(
-        "tavily-search",  # Hardcoded tool
-        {"query": query}
-    )
-
-# After - Dynamic approach
-async def search(self, query: str):
-    capabilities = await self.client.discover_capabilities()
-    plan = await self.llm.plan_research(query, capabilities)
-    results = await self.execute_plan(plan)
-
-Benefits Discovered:
-
-Works with any MCP server
-Automatically adapts to available capabilities
-More robust and maintainable
-True to MCP principles
-
-
-Best Practices Identified:
-
-Always discover capabilities at startup
-Let LLM analyze available capabilities
-Plan execution based on what's available
-Handle missing capabilities gracefully
-
-
-
-Technical Implementation
-
-New Components Added:
-
-Capability discovery system
-Capability analysis by LLM
-Dynamic execution planning
-Flexible result handling
-
-
-Code Organization Improvements:
-
-Separated capability discovery
-Added capability analysis layer
-Improved error handling for missing capabilities
-
-
-Integration Changes:
-
-Modified client initialization
-Updated LLM orchestration
-Enhanced error handling
-
-
-
-Next Steps Identified
-
-Testing Needs:
-
-Test with different capability sets
-Verify capability discovery
-Test missing capability handling
-
-
-Documentation Updates:
-
-Document capability discovery
-Explain dynamic planning
-Update architecture diagrams
-
-
-Future Improvements:
-
-Add capability caching
-Implement capability updates
-Add capability requirement validation

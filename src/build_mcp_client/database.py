@@ -4,6 +4,7 @@ import logging
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 import json
+import asyncio
 from supabase import create_client, Client
 from .config import Config
 
@@ -41,48 +42,25 @@ class DatabaseManager:
     async def create_tables(self):
         """Create required database tables."""
         try:
-            # Sessions table
-            await self.client.table('sessions').execute("""
-                CREATE TABLE IF NOT EXISTS sessions (
-                    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc', NOW()),
-                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc', NOW()),
-                    capabilities JSONB,
-                    metadata JSONB
-                )
-            """)
+            # For Supabase, we'll use raw SQL to create tables
+            # This needs to be done through the Supabase dashboard or migration
+            # as the Python client doesn't support DDL operations directly
             
-            # Research table
-            await self.client.table('research').execute("""
-                CREATE TABLE IF NOT EXISTS research (
-                    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-                    session_id UUID REFERENCES sessions(id),
-                    query TEXT,
-                    plan JSONB,
-                    results JSONB,
-                    analysis JSONB,
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc', NOW())
+            # Verify tables exist by attempting to select from them
+            try:
+                # Wrap synchronous operations in asyncio.to_thread
+                await asyncio.gather(
+                    asyncio.to_thread(lambda: self.client.table('sessions').select("id").limit(1).execute()),
+                    asyncio.to_thread(lambda: self.client.table('research').select("id").limit(1).execute()),
+                    asyncio.to_thread(lambda: self.client.table('capabilities').select("id").limit(1).execute())
                 )
-            """)
-            
-            # Capabilities table
-            await self.client.table('capabilities').execute("""
-                CREATE TABLE IF NOT EXISTS capabilities (
-                    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-                    session_id UUID REFERENCES sessions(id),
-                    capability_type TEXT,
-                    name TEXT,
-                    description TEXT,
-                    schema JSONB,
-                    metadata JSONB,
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc', NOW())
-                )
-            """)
-            
-            logger.info("Database tables created/verified")
+                logger.info("Database tables verified")
+            except Exception as e:
+                logger.error(f"Tables verification failed: {e}")
+                raise Exception("Required tables do not exist. Please create them using the provided SQL script.")
             
         except Exception as e:
-            logger.error(f"Failed to create tables: {e}")
+            logger.error(f"Failed to verify tables: {e}")
             raise
 
     async def create_session(self, capabilities: Dict[str, Any]) -> str:
@@ -99,7 +77,7 @@ class DatabaseManager:
             Exception: If session creation fails
         """
         try:
-            result = await self.client.table('sessions').insert({
+            session_data = {
                 'capabilities': capabilities,
                 'metadata': {
                     'start_time': datetime.now().isoformat(),
@@ -108,14 +86,22 @@ class DatabaseManager:
                     'prompt_count': len(capabilities.get('prompts', [])),
                     'status': 'active'
                 }
-            }).execute()
+            }
             
+            # Wrap the synchronous insert operation in asyncio.to_thread
+            result = await asyncio.to_thread(
+                lambda: self.client.table('sessions').insert(session_data).execute()
+            )
+            
+            if not result.data:
+                raise Exception("Failed to create session - no data returned")
+                
             session_id = result.data[0]['id']
             
             # Store individual capabilities
             for capability_type, items in capabilities.items():
                 for item in items:
-                    await self.client.table('capabilities').insert({
+                    capability_data = {
                         'session_id': session_id,
                         'capability_type': capability_type,
                         'name': item.get('name'),
@@ -125,7 +111,12 @@ class DatabaseManager:
                             k: v for k, v in item.items()
                             if k not in ['name', 'description', 'schema']
                         }
-                    }).execute()
+                    }
+                    
+                    # Wrap the synchronous insert operation in asyncio.to_thread
+                    await asyncio.to_thread(
+                        lambda: self.client.table('capabilities').insert(capability_data).execute()
+                    )
             
             logger.info(f"Created new session: {session_id}")
             return session_id
@@ -157,22 +148,32 @@ class DatabaseManager:
         """
         try:
             # Save research entry
-            await self.client.table('research').insert({
+            research_data = {
                 'session_id': session_id,
                 'query': query,
                 'plan': plan,
                 'results': results,
                 'analysis': analysis
-            }).execute()
+            }
+            
+            # Wrap synchronous operations in asyncio.to_thread
+            await asyncio.to_thread(
+                lambda: self.client.table('research').insert(research_data).execute()
+            )
             
             # Get current session metadata
-            session = await self.client.table('sessions')\
-                .select('metadata')\
-                .eq('id', session_id)\
-                .single()\
-                .execute()
+            session_result = await asyncio.to_thread(
+                lambda: self.client.table('sessions')
+                    .select('metadata')
+                    .eq('id', session_id)
+                    .single()
+                    .execute()
+            )
             
-            current_metadata = session.data['metadata']
+            if not session_result.data:
+                raise Exception(f"Session {session_id} not found")
+                
+            current_metadata = session_result.data['metadata']
             
             # Update session metadata
             updated_metadata = {
@@ -189,15 +190,46 @@ class DatabaseManager:
             }
             
             # Update session
-            await self.client.table('sessions').update({
-                'updated_at': datetime.now().isoformat(),
-                'metadata': updated_metadata
-            }).eq('id', session_id).execute()
+            await asyncio.to_thread(
+                lambda: self.client.table('sessions').update({
+                    'updated_at': datetime.now().isoformat(),
+                    'metadata': updated_metadata
+                }).eq('id', session_id).execute()
+            )
             
             logger.info(f"Saved research results for session: {session_id}")
             
         except Exception as e:
             logger.error(f"Failed to save research results: {e}")
+            raise
+
+    async def get_session_history(self, session_id: str) -> List[Dict[str, Any]]:
+        """
+        Get research history for a session.
+        
+        Args:
+            session_id (str): Session identifier
+            
+        Returns:
+            List[Dict[str, Any]]: List of research entries
+            
+        Raises:
+            Exception: If retrieval fails
+        """
+        try:
+            # Wrap synchronous operations in asyncio.to_thread
+            result = await asyncio.to_thread(
+                lambda: self.client.table('research')
+                    .select('*')
+                    .eq('session_id', session_id)
+                    .order('created_at', desc=True)
+                    .execute()
+            )
+            
+            return result.data if result.data else []
+            
+        except Exception as e:
+            logger.error(f"Failed to get session history: {e}")
             raise
 
     async def get_session_data(self, session_id: str) -> Dict[str, Any]:
@@ -218,24 +250,33 @@ class DatabaseManager:
         """
         try:
             # Get session
-            session = await self.client.table('sessions')\
-                .select('*')\
-                .eq('id', session_id)\
-                .single()\
-                .execute()
+            # Wrap synchronous operations in asyncio.to_thread
+            session = await asyncio.to_thread(
+                lambda: self.client.table('sessions')
+                    .select('*')
+                    .eq('id', session_id)
+                    .single()
+                    .execute()
+            )
                 
             # Get research results
-            research = await self.client.table('research')\
-                .select('*')\
-                .eq('session_id', session_id)\
-                .order('created_at.asc')\
-                .execute()
+            # Wrap synchronous operations in asyncio.to_thread
+            research = await asyncio.to_thread(
+                lambda: self.client.table('research')
+                    .select('*')
+                    .eq('session_id', session_id)
+                    .order('created_at.asc')
+                    .execute()
+            )
                 
             # Get capabilities
-            capabilities = await self.client.table('capabilities')\
-                .select('*')\
-                .eq('session_id', session_id)\
-                .execute()
+            # Wrap synchronous operations in asyncio.to_thread
+            capabilities = await asyncio.to_thread(
+                lambda: self.client.table('capabilities')
+                    .select('*')
+                    .eq('session_id', session_id)
+                    .execute()
+            )
                 
             return {
                 'session': session.data,
@@ -266,11 +307,14 @@ class DatabaseManager:
         """
         try:
             # Get session metadata
-            session = await self.client.table('sessions')\
-                .select('metadata, capabilities, updated_at')\
-                .eq('id', session_id)\
-                .single()\
-                .execute()
+            # Wrap synchronous operations in asyncio.to_thread
+            session = await asyncio.to_thread(
+                lambda: self.client.table('sessions')
+                    .select('metadata, capabilities, updated_at')
+                    .eq('id', session_id)
+                    .single()
+                    .execute()
+            )
             
             metadata = session.data['metadata']
             capabilities = session.data['capabilities']
@@ -312,16 +356,20 @@ class DatabaseManager:
         """
         try:
             # Update session metadata
-            await self.client.table('sessions').update({
-                'updated_at': datetime.now().isoformat(),
-                'metadata': self.client.table('sessions')
-                    .select('metadata')
-                    .eq('id', session_id)
-                    .execute()
-                    .data[0]['metadata'] | {
+            # Wrap synchronous operations in asyncio.to_thread
+            await asyncio.to_thread(
+                lambda: self.client.table('sessions').update({
+                    'updated_at': datetime.now().isoformat(),
+                    'metadata': (await asyncio.to_thread(
+                        lambda: self.client.table('sessions')
+                            .select('metadata')
+                            .eq('id', session_id)
+                            .execute()
+                    )).data[0]['metadata'] | {
                         'last_saved': datetime.now().isoformat()
                     }
-            }).eq('id', session_id).execute()
+                }).eq('id', session_id).execute()
+            )
             
             logger.info(f"Saved session state: {session_id}")
             
@@ -340,10 +388,13 @@ class DatabaseManager:
             bool: True if session exists
         """
         try:
-            result = await self.client.table('sessions')\
-                .select('id')\
-                .eq('id', session_id)\
-                .execute()
+            # Wrap synchronous operations in asyncio.to_thread
+            result = await asyncio.to_thread(
+                lambda: self.client.table('sessions')
+                    .select('id')
+                    .eq('id', session_id)
+                    .execute()
+            )
             return len(result.data) > 0
         except Exception as e:
             logger.error(f"Failed to check session existence: {e}")
@@ -409,9 +460,7 @@ class DatabaseManager:
     async def cleanup(self):
         """Clean up database resources."""
         try:
-            # Implement any necessary cleanup
-            # Currently a placeholder as the Supabase client handles most cleanup
+            # Supabase client doesn't require explicit cleanup
             logger.info("Database cleanup completed")
         except Exception as e:
             logger.error(f"Database cleanup failed: {e}")
-            raise

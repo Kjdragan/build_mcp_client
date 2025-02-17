@@ -5,6 +5,7 @@ import json
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 from anthropic import Anthropic
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ class LLMOrchestrator:
         try:
             capabilities_desc = json.dumps(capabilities, indent=2)
             
-            response = await self.client.messages.create(
+            response = await asyncio.to_thread(lambda: self.client.messages.create(
                 model="claude-3-opus-20240229",
                 max_tokens=1000,
                 messages=[{
@@ -40,7 +41,7 @@ Explain:
 3. Any limitations or gaps
 4. Best practices for usage"""
                 }]
-            )
+            ))
             
             # Extract text from the response content
             if response.content and len(response.content) > 0:
@@ -54,7 +55,7 @@ Explain:
     async def plan_research(self, query: str, capabilities: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
         """Plan research using available capabilities."""
         try:
-            response = await self.client.messages.create(
+            response = await asyncio.to_thread(lambda: self.client.messages.create(
                 model="claude-3-opus-20240229",
                 max_tokens=1000,
                 messages=[{
@@ -76,7 +77,7 @@ Return the plan as JSON with:
 - expected_outcomes: What each step should produce
 - fallback_options: Alternative approaches if steps fail"""
                 }]
-            )
+            ))
             
             # Parse JSON from the response text
             if response.content and len(response.content) > 0:
@@ -173,7 +174,7 @@ Return the plan as JSON with:
     async def analyze_results(self, results: Dict[str, Any]) -> Dict[str, Any]:
         """Analyze research results."""
         try:
-            response = await self.client.messages.create(
+            response = await asyncio.to_thread(lambda: self.client.messages.create(
                 model="claude-3-opus-20240229",
                 max_tokens=2000,
                 messages=[{
@@ -196,7 +197,7 @@ Format as JSON with:
 - gaps: Information gaps identified
 - recommendations: Suggested next steps"""
                 }]
-            )
+            ))
             
             # Parse JSON from the response text
             if response.content and len(response.content) > 0:
@@ -216,29 +217,24 @@ Format as JSON with:
             logger.error(f"Results analysis failed: {e}")
             raise
 
-    async def execute_fallback(self, fallback: Dict[str, Any], mcp_client: Any) -> Dict[str, Any]:
-        """Execute fallback plan for failed steps."""
-        try:
-            if fallback['type'] == 'tool':
-                return await mcp_client.execute_tool(
-                    fallback['name'],
-                    fallback['parameters']
-                )
-            elif fallback['type'] == 'resource':
-                return await mcp_client.read_resource(
-                    fallback['uri']
-                )
-            elif fallback['type'] == 'prompt':
-                return await mcp_client.get_prompt(
-                    fallback['name'],
-                    fallback['arguments']
-                )
-            else:
-                raise ValueError(f"Unknown fallback type: {fallback['type']}")
-                
-        except Exception as e:
-            logger.error(f"Fallback execution failed: {e}")
-            raise
+    async def execute_fallback(self, fallback: Dict[str, Any], mcp_client: Any) -> Any:
+        """Execute a fallback action."""
+        if fallback['type'] == 'tool':
+            return await mcp_client.execute_tool(
+                fallback['name'],
+                fallback['parameters']
+            )
+        elif fallback['type'] == 'resource':
+            return await mcp_client.read_resource(
+                fallback['uri']
+            )
+        elif fallback['type'] == 'prompt':
+            return await mcp_client.get_prompt(
+                fallback['name'],
+                fallback['arguments']
+            )
+        else:
+            raise ValueError(f"Unknown fallback type: {fallback['type']}")
 
     def get_session_summary(self) -> Dict[str, Any]:
         """Get summary of current research session."""

@@ -12,7 +12,8 @@ dependencies = [
     "anthropic",
     "supabase",
     "python-dotenv",
-    "httpx"
+    "httpx",
+    "asyncio>=3.4.3",
 ]
 
 [build-system]
