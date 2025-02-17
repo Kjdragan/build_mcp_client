@@ -50,7 +50,7 @@ class LLMOrchestrator:
             
         # Initialize Anthropic client with Instructor
         anthropic = Anthropic(api_key=api_key)
-        self.client = instructor.patch(anthropic)  # Use patch instead of from_anthropic
+        self.client = instructor.from_anthropic(anthropic)
         self.current_session: Dict[str, Any] = {}
         logger.info("LLM Orchestrator initialized")
 
@@ -62,7 +62,7 @@ class LLMOrchestrator:
                 for tool in capabilities.get('tools', [])
             ])
             
-            return self.client.chat.completions.create(
+            return self.client.messages.create(
                 model="claude-3-opus-20240229",
                 max_tokens=1000,
                 messages=[{
@@ -95,7 +95,7 @@ Provide a detailed analysis covering:
         """Plan research using available capabilities."""
         try:
             # Create research plan using Instructor's structured output
-            return self.client.chat.completions.create(
+            return self.client.messages.create(
                 model="claude-3-opus-20240229",
                 max_tokens=1000,
                 messages=[{
@@ -144,7 +144,7 @@ Create a research plan that uses these capabilities effectively."""
         try:
             for step in plan.steps:
                 step_result = {
-                    'step': step.dict(),
+                    'step': step.model_dump(),  # Use Pydantic's model_dump
                     'status': 'pending',
                     'start_time': datetime.now().isoformat()
                 }
@@ -213,7 +213,7 @@ Create a research plan that uses these capabilities effectively."""
         """Analyze research results."""
         try:
             # Analyze results using Instructor's structured output
-            return self.client.chat.completions.create(
+            return self.client.messages.create(
                 model="claude-3-opus-20240229",
                 max_tokens=2000,
                 messages=[{

@@ -37,20 +37,103 @@ class MCPClient:
 
     def execute_tool_sync(self, tool_name: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
         """Synchronous version of execute_tool."""
-        return asyncio.run(self.execute_tool(tool_name, parameters))
+        if not self.session:
+            raise ValueError("Client not initialized")
+
+        tool = next(
+            (t for t in self.capabilities['tools'] if t['name'] == tool_name),
+            None
+        )
+        if not tool:
+            raise ValueError(f"Tool not found: {tool_name}")
+
+        try:
+            logger.debug(f"Executing tool {tool_name} with parameters: {parameters}")
+            # Use asyncio.run in a new event loop
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                result = loop.run_until_complete(self.session.call_tool(tool_name, parameters))
+            finally:
+                loop.close()
+
+            return {
+                'tool': tool_name,
+                'parameters': parameters,
+                'result': result.content,
+                'timestamp': datetime.now().isoformat()
+            }
+
+        except Exception as e:
+            logger.error(f"Tool execution failed: {e}")
+            raise
 
     def read_resource_sync(self, uri: str) -> Dict[str, Any]:
         """Synchronous version of read_resource."""
-        return asyncio.run(self.read_resource(uri))
+        if not self.session:
+            raise ValueError("Client not initialized")
+
+        resource = next(
+            (r for r in self.capabilities['resources'] if r['uri'] == uri),
+            None
+        )
+        if not resource:
+            raise ValueError(f"Resource not found: {uri}")
+
+        try:
+            logger.debug(f"Reading resource: {uri}")
+            # Use asyncio.run in a new event loop
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                result = loop.run_until_complete(self.session.read_resource(uri))
+            finally:
+                loop.close()
+
+            return {
+                'uri': uri,
+                'content': result.content,
+                'mime_type': resource['mime_type'],
+                'timestamp': datetime.now().isoformat()
+            }
+
+        except Exception as e:
+            logger.error(f"Resource read failed: {e}")
+            raise
 
     def get_prompt_sync(self, prompt_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Synchronous version of get_prompt."""
-        return asyncio.run(self.get_prompt(prompt_name, arguments))
+        if not self.session:
+            raise ValueError("Client not initialized")
 
-    def cleanup_sync(self):
-        """Synchronous version of cleanup."""
-        return asyncio.run(self.cleanup())
-        
+        prompt = next(
+            (p for p in self.capabilities['prompts'] if p['name'] == prompt_name),
+            None
+        )
+        if not prompt:
+            raise ValueError(f"Prompt not found: {prompt_name}")
+
+        try:
+            logger.debug(f"Getting prompt {prompt_name} with arguments: {arguments}")
+            # Use asyncio.run in a new event loop
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                result = loop.run_until_complete(self.session.get_prompt(prompt_name, arguments))
+            finally:
+                loop.close()
+
+            return {
+                'prompt': prompt_name,
+                'arguments': arguments,
+                'result': result.content,
+                'timestamp': datetime.now().isoformat()
+            }
+
+        except Exception as e:
+            logger.error(f"Prompt retrieval failed: {e}")
+            raise
+
     async def discover_capabilities(self) -> Dict[str, List[Dict[str, Any]]]:
         """Discover all available MCP capabilities."""
         if not self.session:

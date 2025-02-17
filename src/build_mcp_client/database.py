@@ -119,9 +119,9 @@ class DatabaseManager:
         self,
         session_id: str,
         query: str,
-        plan: Dict[str, Any],
+        plan: Any,
         results: Dict[str, Any],
-        analysis: Dict[str, Any]
+        analysis: Any
     ):
         """
         Save research results.
@@ -129,21 +129,25 @@ class DatabaseManager:
         Args:
             session_id (str): Session identifier
             query (str): Research query
-            plan (Dict[str, Any]): Research plan
+            plan (Any): Research plan (Pydantic model)
             results (Dict[str, Any]): Research results
-            analysis (Dict[str, Any]): Result analysis
+            analysis (Any): Result analysis (Pydantic model)
             
         Raises:
             Exception: If save fails
         """
         try:
+            # Convert Pydantic models to dict for JSON serialization
+            plan_dict = plan.model_dump() if hasattr(plan, 'model_dump') else plan
+            analysis_dict = analysis.model_dump() if hasattr(analysis, 'model_dump') else analysis
+            
             # Save research entry
             research_data = {
                 'session_id': session_id,
                 'query': query,
-                'plan': plan,
+                'plan': plan_dict,
                 'results': results,
-                'analysis': analysis
+                'analysis': analysis_dict
             }
             
             self.client.table('research').insert(research_data).execute()
