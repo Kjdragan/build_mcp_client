@@ -1,264 +1,232 @@
-from typing import List, Dict, Any, Optional
-from dataclasses import dataclass
+# llm.py
+
+import logging
 import json
+from typing import Any, Dict, List, Optional
 from datetime import datetime
+from anthropic import Anthropic
 
-from anthropic import AsyncAnthropic
-
-@dataclass
-class PlanStep:
-    """Represents a step in the LLM's action plan."""
-    action: str  # 'search', 'analyze', 'synthesize', 'clarify'
-    description: str
-    parameters: Dict[str, Any]
-
-@dataclass
-class ExecutionResult:
-    """Results from executing a plan step."""
-    success: bool
-    content: str
-    metadata: Dict[str, Any]
+logger = logging.getLogger(__name__)
 
 class LLMOrchestrator:
-    """
-    Orchestrates interactions between user, MCP tools, and database.
-    Acts as the primary decision maker for all operations.
-    """
+    """Orchestrates LLM interactions with dynamic MCP capabilities."""
     
-    def __init__(self, api_key: str, model: str = "claude-3-haiku-20240307"):
-        """Initialize the orchestrator with required clients."""
-        self.client = AsyncAnthropic(api_key=api_key)
-        self.model = model
-        self.conversation_context: List[Dict[str, Any]] = []
-        
-    async def process_user_input(
-        self,
-        user_input: str,
-        available_tools: List[Dict[str, Any]],
-        recent_results: Optional[str] = None
-    ) -> str:
-        """
-        Process user input and orchestrate necessary actions.
-        
-        Args:
-            user_input: The user's query or command
-            available_tools: List of available MCP tools
-            recent_results: Optional recent search results
+    def __init__(self, api_key: str):
+        if not api_key:
+            raise ValueError("Anthropic API key is required")
             
-        Returns:
-            Formatted response for user
-        """
-        # First, plan what actions to take
-        plan = await self._create_action_plan(user_input, available_tools, recent_results)
-        
-        # Execute the plan
-        results = []
-        for step in plan:
-            result = await self._execute_plan_step(step, available_tools)
-            results.append(result)
+        self.client = Anthropic(api_key=api_key)
+        self.current_session: Dict[str, Any] = {}
+        logger.info("LLM Orchestrator initialized")
+
+    async def analyze_capabilities(self, capabilities: Dict[str, List[Dict[str, Any]]]) -> str:
+        """Analyze available MCP capabilities."""
+        try:
+            capabilities_desc = json.dumps(capabilities, indent=2)
             
-        # Synthesize results into a coherent response
-        final_response = await self._synthesize_results(user_input, results)
-        
-        return final_response
-    
-    async def _create_action_plan(
-        self,
-        user_input: str,
-        available_tools: List[Dict[str, Any]],
-        recent_results: Optional[str] = None
-    ) -> List[PlanStep]:
-        """Create a plan of actions to take based on user input."""
-        
-        # Construct prompt for planning
-        tool_descriptions = "\n".join(
-            f"- {tool['name']}: {tool['description']}"
-            for tool in available_tools
-        )
-        
-        context = f"""Available tools:\n{tool_descriptions}
+            response = await self.client.messages.create(
+                model="claude-3-opus-20240229",
+                max_tokens=1000,
+                messages=[{
+                    "role": "user",
+                    "content": f"""Analyze these MCP capabilities and summarize how they could be used for research:
 
-Recent results: {recent_results if recent_results else 'None'}
+Available Capabilities:
+{capabilities_desc}
 
-Create a plan to address this user query: {user_input}
+Explain:
+1. What kinds of research tasks are possible
+2. How the tools could be combined
+3. Any limitations or gaps
+4. Best practices for usage"""
+                }]
+            )
+            
+            return response.content
+            
+        except Exception as e:
+            logger.error(f"Capability analysis failed: {e}")
+            raise
 
-Response should be a JSON list of steps, each with:
-- action: 'search' (use tavily tools), 'analyze' (analyze stored data), 'synthesize' (combine results), or 'clarify' (ask user for clarification)
-- description: what this step will do
-- parameters: specific parameters for the action"""
-        
-        response = await self.client.messages.create(
-            model=self.model,
-            max_tokens=1000,
-            messages=[{
-                "role": "user",
-                "content": context
-            }]
-        )
+    async def plan_research(self, query: str, capabilities: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
+        """Plan research using available capabilities."""
+        try:
+            response = await self.client.messages.create(
+                model="claude-3-opus-20240229",
+                max_tokens=1000,
+                messages=[{
+                    "role": "user",
+                    "content": f"""Research query: {query}
+
+Available MCP capabilities:
+{json.dumps(capabilities, indent=2)}
+
+Create a research plan that:
+1. Identifies which capabilities would be useful
+2. Explains how to use them effectively
+3. Specifies the order of operations
+4. Includes any required parameters
+
+Return the plan as JSON with:
+- steps: Array of actions to take (tool/resource/prompt usage)
+- parameters: Parameters for each step
+- expected_outcomes: What each step should produce
+- fallback_options: Alternative approaches if steps fail"""
+                }]
+            )
+            
+            return json.loads(response.content)
+            
+        except Exception as e:
+            logger.error(f"Research planning failed: {e}")
+            raise
+
+    async def execute_research_plan(self, plan: Dict[str, Any], mcp_client: Any) -> Dict[str, Any]:
+        """Execute a research plan using available capabilities."""
+        results = {
+            'steps': [],
+            'data': [],
+            'metadata': {
+                'start_time': datetime.now().isoformat(),
+                'success_count': 0,
+                'failure_count': 0
+            }
+        }
         
         try:
-            plan_data = json.loads(response.content[0].text)
-            return [PlanStep(**step) for step in plan_data]
+            for step in plan.get('steps', []):
+                step_result = {
+                    'step': step,
+                    'status': 'pending',
+                    'start_time': datetime.now().isoformat()
+                }
+                
+                try:
+                    if step['type'] == 'tool':
+                        result = await mcp_client.execute_tool(
+                            step['name'],
+                            step['parameters']
+                        )
+                        step_result['data'] = result
+                        
+                    elif step['type'] == 'resource':
+                        result = await mcp_client.read_resource(
+                            step['uri']
+                        )
+                        step_result['data'] = result
+                        
+                    elif step['type'] == 'prompt':
+                        result = await mcp_client.get_prompt(
+                            step['name'],
+                            step['arguments']
+                        )
+                        step_result['data'] = result
+                        
+                    step_result['status'] = 'completed'
+                    step_result['end_time'] = datetime.now().isoformat()
+                    results['metadata']['success_count'] += 1
+                    
+                except Exception as e:
+                    step_result['status'] = 'failed'
+                    step_result['error'] = str(e)
+                    step_result['end_time'] = datetime.now().isoformat()
+                    results['metadata']['failure_count'] += 1
+                    
+                    # Try fallback if available
+                    if step.get('fallback'):
+                        try:
+                            fallback_result = await self.execute_fallback(
+                                step['fallback'],
+                                mcp_client
+                            )
+                            step_result['fallback_data'] = fallback_result
+                            step_result['status'] = 'completed_with_fallback'
+                        except Exception as fallback_e:
+                            step_result['fallback_error'] = str(fallback_e)
+                
+                results['steps'].append(step_result)
+                if step_result.get('data'):
+                    results['data'].append(step_result['data'])
+                
+            results['metadata']['end_time'] = datetime.now().isoformat()
+            return results
+            
         except Exception as e:
-            # Fallback to single search step if parsing fails
-            return [PlanStep(
-                action="search",
-                description="Perform initial search based on user query",
-                parameters={"query": user_input}
-            )]
-    
-    async def _execute_plan_step(
-        self,
-        step: PlanStep,
-        available_tools: List[Dict[str, Any]]
-    ) -> ExecutionResult:
-        """Execute a single step from the plan."""
-        
-        if step.action == "search":
-            result = await self._execute_tool_step(step, available_tools)
-        elif step.action == "analyze":
-            result = await self._analyze_data(step)
-        elif step.action == "synthesize":
-            result = await self._synthesize_data(step)
-        elif step.action == "clarify":
-            result = ExecutionResult(
-                success=True,
-                content=step.description,
-                metadata={"needs_clarification": True}
-            )
-        else:
-            result = ExecutionResult(
-                success=False,
-                content=f"Unknown action: {step.action}",
-                metadata={}
+            logger.error(f"Research execution failed: {e}")
+            raise
+
+    async def analyze_results(self, results: Dict[str, Any]) -> Dict[str, Any]:
+        """Analyze research results."""
+        try:
+            response = await self.client.messages.create(
+                model="claude-3-opus-20240229",
+                max_tokens=2000,
+                messages=[{
+                    "role": "user",
+                    "content": f"""Analyze these research results:
+
+Results:
+{json.dumps(results, indent=2)}
+
+Provide:
+1. Key findings and insights
+2. Success/failure analysis
+3. Data quality assessment
+4. Suggestions for improvement
+5. Additional research needs
+
+Format as JSON with:
+- findings: Array of key findings
+- quality: Data quality assessment
+- gaps: Information gaps identified
+- recommendations: Suggested next steps"""
+                }]
             )
             
-        return result
-    
-    async def _execute_tool_step(
-        self,
-        step: PlanStep,
-        available_tools: List[Dict[str, Any]]
-    ) -> ExecutionResult:
-        """Execute a tool-based step using MCP tools."""
-        
-        messages = [
-            {
-                "role": "user",
-                "content": f"Execute this search: {step.parameters.get('query', '')}"
-            }
-        ]
-        
-        response = await self.client.messages.create(
-            model=self.model,
-            max_tokens=1000,
-            messages=messages,
-            tools=available_tools
-        )
-        
-        tool_results = []
-        for content in response.content:
-            if content.type == 'tool_calls':
-                for tool_call in content.tool_calls:
-                    tool_results.append({
-                        "tool": tool_call.name,
-                        "parameters": tool_call.parameters
-                    })
-        
-        return ExecutionResult(
-            success=True,
-            content=response.content[0].text,
-            metadata={"tool_calls": tool_results}
-        )
-    
-    async def _analyze_data(self, step: PlanStep) -> ExecutionResult:
-        """Analyze stored data based on plan step."""
-        
-        messages = [
-            {
-                "role": "system",
-                "content": "You are an expert data analyst. Analyze the provided data and generate insights."
-            },
-            {
-                "role": "user",
-                "content": f"Analysis task: {step.description}\n\nParameters: {json.dumps(step.parameters)}"
-            }
-        ]
-        
-        response = await self.client.messages.create(
-            model=self.model,
-            max_tokens=1000,
-            messages=messages
-        )
-        
-        return ExecutionResult(
-            success=True,
-            content=response.content[0].text,
-            metadata={"analysis_type": step.parameters.get("type", "general")}
-        )
-    
-    async def _synthesize_data(self, step: PlanStep) -> ExecutionResult:
-        """Synthesize multiple results into coherent information."""
-        
-        messages = [
-            {
-                "role": "system",
-                "content": "You are an expert at synthesizing information into clear, coherent summaries."
-            },
-            {
-                "role": "user",
-                "content": f"Synthesize this information: {step.parameters.get('content', '')}"
-            }
-        ]
-        
-        response = await self.client.messages.create(
-            model=self.model,
-            max_tokens=1000,
-            messages=messages
-        )
-        
-        return ExecutionResult(
-            success=True,
-            content=response.content[0].text,
-            metadata={"synthesis_type": step.parameters.get("type", "general")}
-        )
-    
-    async def _synthesize_results(
-        self,
-        original_query: str,
-        results: List[ExecutionResult]
-    ) -> str:
-        """Create final response from all results."""
-        
-        # Compile results into a format for synthesis
-        results_text = "\n\n".join(
-            f"Step Result:\n{result.content}"
-            for result in results
-            if result.success
-        )
-        
-        messages = [
-            {
-                "role": "system",
-                "content": "You are an expert at creating clear, helpful responses that accurately address user queries."
-            },
-            {
-                "role": "user",
-                "content": f"""Original query: {original_query}
+            return json.loads(response.content)
+            
+        except Exception as e:
+            logger.error(f"Results analysis failed: {e}")
+            raise
 
-Execution results:
-{results_text}
+    async def execute_fallback(self, fallback: Dict[str, Any], mcp_client: Any) -> Dict[str, Any]:
+        """Execute fallback plan for failed steps."""
+        try:
+            if fallback['type'] == 'tool':
+                return await mcp_client.execute_tool(
+                    fallback['name'],
+                    fallback['parameters']
+                )
+            elif fallback['type'] == 'resource':
+                return await mcp_client.read_resource(
+                    fallback['uri']
+                )
+            elif fallback['type'] == 'prompt':
+                return await mcp_client.get_prompt(
+                    fallback['name'],
+                    fallback['arguments']
+                )
+            else:
+                raise ValueError(f"Unknown fallback type: {fallback['type']}")
+                
+        except Exception as e:
+            logger.error(f"Fallback execution failed: {e}")
+            raise
 
-Create a clear, coherent response that addresses the original query using these results.
-Include relevant specific details but maintain clarity.
-Suggest follow-up questions or areas for further investigation if appropriate."""
-            }
-        ]
-        
-        response = await self.client.messages.create(
-            model=self.model,
-            max_tokens=1000,
-            messages=messages
-        )
-        
-        return response.content[0].text
+    def get_session_summary(self) -> Dict[str, Any]:
+        """Get summary of current research session."""
+        return {
+            'query_count': len(self.current_session),
+            'successful_queries': sum(
+                1 for q in self.current_session.values()
+                if q.get('status') == 'completed'
+            ),
+            'failed_queries': sum(
+                1 for q in self.current_session.values()
+                if q.get('status') == 'failed'
+            ),
+            'latest_query': max(
+                (q.get('timestamp') for q in self.current_session.values()),
+                default=None
+            )
+        }
