@@ -1,62 +1,68 @@
-from pathlib import Path
-from dotenv import load_dotenv
+# client.py
 import os
-from typing import Dict, Optional
+import logging
+from typing import Optional
+from contextlib import AsyncExitStack
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
 
-class Config:
-    """Configuration manager for the MCP client."""
-    
-    _instance: Optional['Config'] = None
-    _config: Dict[str, str] = {}
-    
-    def __new__(cls):
-        """Implement singleton pattern to ensure only one config instance."""
-        if cls._instance is None:
-            cls._instance = super(Config, cls).__new__(cls)
-            cls._instance._load_config()
-        return cls._instance
-    
-    def _load_config(self) -> None:
-        """Load configuration from environment variables."""
-        env_path = Path(__file__).parent.parent.parent / '.env'
-        load_dotenv(env_path)
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
+class MCPClient:
+    def __init__(self):
+        self.session: Optional[ClientSession] = None
+        self.exit_stack = AsyncExitStack()
         
-        required_vars = {
-            'ANTHROPIC_API_KEY': 'API key for Claude/Anthropic',
-            'SUPABASE_URL': 'Supabase project URL',
-            'SUPABASE_KEY': 'Supabase API key',
-            'TAVILY_API_KEY': 'Tavily API key'
-        }
-        
-        missing_vars = []
-        for var, description in required_vars.items():
-            value = os.getenv(var)
-            if not value:
-                missing_vars.append(f"{var} ({description})")
-            self._config[var.lower()] = value if value else ''
+    async def connect_to_tavily(self):
+        """Connect to the Tavily MCP server with detailed error handling"""
+        try:
+            logger.debug("Attempting to connect to Tavily MCP server...")
             
-        if missing_vars:
-            raise EnvironmentError(
-                "Missing required environment variables:\n" + 
-                "\n".join(f"- {var}" for var in missing_vars)
+            # Use npx to run the Tavily MCP server
+            server_params = StdioServerParameters(
+                command="npx",
+                args=["-y", "tavily-mcp"],
+                env={"TAVILY_API_KEY": os.getenv("TAVILY_API_KEY")}
             )
-    
-    @property
-    def anthropic_api_key(self) -> str:
-        """Get the Anthropic API key."""
-        return self._config['anthropic_api_key']
-    
-    @property
-    def supabase_url(self) -> str:
-        """Get the Supabase URL."""
-        return self._config['supabase_url']
-    
-    @property
-    def supabase_key(self) -> str:
-        """Get the Supabase API key."""
-        return self._config['supabase_key']
-    
-    @property
-    def tavily_api_key(self) -> str:
-        """Get the Tavily API key."""
-        return self._config['tavily_api_key']
+            
+            logger.debug(f"Server parameters configured: {server_params}")
+            
+            # Create the transport
+            stdio_transport = await self.exit_stack.enter_async_context(
+                stdio_client(server_params)
+            )
+            
+            logger.debug("Transport created successfully")
+            
+            # Create and initialize the session
+            self.stdio, self.write = stdio_transport
+            self.session = await self.exit_stack.enter_async_context(
+                ClientSession(self.stdio, self.write)
+            )
+            
+            logger.debug("Session created successfully")
+            
+            # Initialize the connection
+            await self.session.initialize()
+            logger.info("Successfully connected to Tavily MCP server")
+            
+            # List available tools
+            tools = await self.session.list_tools()
+            logger.info(f"Available tools: {[tool.name for tool in tools.tools]}")
+            
+        except FileNotFoundError as e:
+            logger.error(f"Failed to find npx or Tavily MCP server: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Failed to connect to Tavily MCP server: {e}")
+            raise
+
+    async def cleanup(self):
+        """Clean up resources"""
+        if self.session:
+            try:
+                await self.exit_stack.aclose()
+                logger.info("Successfully cleaned up MCP client resources")
+            except Exception as e:
+                logger.error(f"Error during cleanup: {e}")
