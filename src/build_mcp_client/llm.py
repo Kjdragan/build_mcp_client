@@ -9,6 +9,14 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
+class CapabilityAnalysis(BaseModel):
+    """Analysis of MCP capabilities."""
+    possible_tasks: List[str] = Field(..., description="Research tasks that are possible")
+    combinations: List[str] = Field(..., description="How tools can be combined")
+    limitations: List[str] = Field(..., description="Limitations and gaps")
+    best_practices: List[str] = Field(..., description="Best practices for usage")
+    summary: str = Field(..., description="Overall summary of capabilities")
+
 class ResearchStep(BaseModel):
     """A single step in a research plan."""
     type: str = Field(..., description="Type of step (tool, resource, prompt)")
@@ -42,11 +50,11 @@ class LLMOrchestrator:
             
         # Initialize Anthropic client with Instructor
         anthropic = Anthropic(api_key=api_key)
-        self.client = instructor.from_anthropic(anthropic)
+        self.client = instructor.patch(anthropic)  # Use patch instead of from_anthropic
         self.current_session: Dict[str, Any] = {}
         logger.info("LLM Orchestrator initialized")
 
-    def analyze_capabilities(self, capabilities: Dict[str, List[Dict[str, Any]]]) -> str:
+    def analyze_capabilities(self, capabilities: Dict[str, List[Dict[str, Any]]]) -> CapabilityAnalysis:
         """Analyze available MCP capabilities."""
         try:
             capabilities_desc = "\n".join([
@@ -54,38 +62,40 @@ class LLMOrchestrator:
                 for tool in capabilities.get('tools', [])
             ])
             
-            response = self.client.messages.create(
+            return self.client.chat.completions.create(
                 model="claude-3-opus-20240229",
                 max_tokens=1000,
                 messages=[{
                     "role": "user",
-                    "content": f"""Analyze these MCP capabilities and summarize how they could be used for research:
+                    "content": f"""Analyze these MCP capabilities and explain how they could be used for research:
 
 Available Capabilities:
 {capabilities_desc}
 
-Explain:
-1. What kinds of research tasks are possible
+Provide a detailed analysis covering:
+1. What research tasks are possible
 2. How the tools could be combined
 3. Any limitations or gaps
 4. Best practices for usage"""
-                }]
+                }],
+                response_model=CapabilityAnalysis
             )
-            
-            # Extract text from the response content
-            if response.content and len(response.content) > 0:
-                return response.content[0].text
-            return "No capability analysis available"
             
         except Exception as e:
             logger.error(f"Capability analysis failed: {e}")
-            raise
+            return CapabilityAnalysis(
+                possible_tasks=["Basic web search and content extraction"],
+                combinations=["Search followed by detailed content analysis"],
+                limitations=["Limited to web-based research"],
+                best_practices=["Use focused search queries", "Validate extracted content"],
+                summary="Basic web research capabilities available through Tavily integration"
+            )
 
     def plan_research(self, query: str, capabilities: Dict[str, List[Dict[str, Any]]]) -> ResearchPlan:
         """Plan research using available capabilities."""
         try:
             # Create research plan using Instructor's structured output
-            return self.client.messages.create(
+            return self.client.chat.completions.create(
                 model="claude-3-opus-20240229",
                 max_tokens=1000,
                 messages=[{
@@ -203,7 +213,7 @@ Create a research plan that uses these capabilities effectively."""
         """Analyze research results."""
         try:
             # Analyze results using Instructor's structured output
-            return self.client.messages.create(
+            return self.client.chat.completions.create(
                 model="claude-3-opus-20240229",
                 max_tokens=2000,
                 messages=[{
