@@ -42,7 +42,10 @@ Explain:
                 }]
             )
             
-            return response.content
+            # Extract text from the response content
+            if response.content and len(response.content) > 0:
+                return response.content[0].text
+            return "No capability analysis available"
             
         except Exception as e:
             logger.error(f"Capability analysis failed: {e}")
@@ -75,7 +78,19 @@ Return the plan as JSON with:
                 }]
             )
             
-            return json.loads(response.content)
+            # Parse JSON from the response text
+            if response.content and len(response.content) > 0:
+                try:
+                    return json.loads(response.content[0].text)
+                except json.JSONDecodeError:
+                    logger.error("Failed to parse JSON from response")
+                    return {
+                        "error": "Invalid JSON response",
+                        "raw_response": response.content[0].text
+                    }
+            return {
+                "error": "No response content available"
+            }
             
         except Exception as e:
             logger.error(f"Research planning failed: {e}")
@@ -183,7 +198,19 @@ Format as JSON with:
                 }]
             )
             
-            return json.loads(response.content)
+            # Parse JSON from the response text
+            if response.content and len(response.content) > 0:
+                try:
+                    return json.loads(response.content[0].text)
+                except json.JSONDecodeError:
+                    logger.error("Failed to parse JSON from response")
+                    return {
+                        "error": "Invalid JSON response",
+                        "raw_response": response.content[0].text
+                    }
+            return {
+                "error": "No response content available"
+            }
             
         except Exception as e:
             logger.error(f"Results analysis failed: {e}")
