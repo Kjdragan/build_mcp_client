@@ -2,7 +2,7 @@
 
 import os
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List
 from pathlib import Path
 from dotenv import load_dotenv
@@ -14,7 +14,7 @@ class MCPServerConfig:
     """MCP server configuration settings."""
     command: str
     args: List[str]
-    env: Dict[str, str]
+    env: Dict[str, str] = field(default_factory=dict)
 
 @dataclass
 class DatabaseConfig:
@@ -44,12 +44,12 @@ class Config:
     request_timeout: int = 30
     
     # Database Settings
-    db_config: DatabaseConfig = DatabaseConfig()
+    db_config: DatabaseConfig = field(default_factory=DatabaseConfig)
     
     # File Paths
-    log_dir: Path = Path("_logs")
-    data_dir: Path = Path("_data")
-    cache_dir: Path = Path("_cache")
+    log_dir: Path = field(default_factory=lambda: Path("_logs"))
+    data_dir: Path = field(default_factory=lambda: Path("_data"))
+    cache_dir: Path = field(default_factory=lambda: Path("_cache"))
     
     @classmethod
     def load_from_env(cls, env_file: str = ".env") -> 'Config':

@@ -5,10 +5,13 @@ import logging
 from typing import Optional, Dict, Any, List
 from contextlib import AsyncExitStack
 from datetime import datetime
+from pathlib import Path
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 logger = logging.getLogger(__name__)
+
+TAVILY_MCP_PATH = Path(os.path.expanduser("~")) / "AppData/Roaming/npm/node_modules/tavily-mcp/build/index.js"
 
 class MCPClient:
     """Dynamic MCP client implementation."""
@@ -78,15 +81,27 @@ class MCPClient:
             logger.error(f"Capability discovery failed: {e}")
             raise
 
-    async def connect_to_server(self, command: str, args: List[str], env: Optional[Dict[str, str]] = None):
+    async def connect_to_server(self, command: str = "node", args: Optional[List[str]] = None, env: Optional[Dict[str, str]] = None):
         """Connect to an MCP server."""
         try:
-            logger.debug(f"Connecting to MCP server: {command} {' '.join(args)}")
+            # Verify Tavily MCP server exists
+            if not TAVILY_MCP_PATH.exists():
+                raise FileNotFoundError(
+                    f"Tavily MCP server not found at {TAVILY_MCP_PATH}. "
+                    "Please install using: npm install -g tavily-mcp"
+                )
+
+            # Use the direct path to the Tavily MCP server
+            server_args = [str(TAVILY_MCP_PATH)]
+            server_env = env or {}
+            
+            logger.debug(f"Connecting to MCP server at: {TAVILY_MCP_PATH}")
+            logger.debug(f"Server environment: {server_env}")
             
             server_params = StdioServerParameters(
                 command=command,
-                args=args,
-                env=env or {}
+                args=server_args,
+                env=server_env
             )
             
             self.transport = await self.exit_stack.enter_async_context(
@@ -105,6 +120,9 @@ class MCPClient:
             
             logger.info("Successfully connected to MCP server")
             
+        except FileNotFoundError as e:
+            logger.error(f"Server not found: {e}")
+            raise
         except Exception as e:
             logger.error(f"Failed to connect to MCP server: {e}")
             raise

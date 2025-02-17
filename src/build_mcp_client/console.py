@@ -80,8 +80,7 @@ class ResearchConsole:
             # Connect to MCP server and discover capabilities
             logger.info("Connecting to MCP server...")
             await self.client.connect_to_server(
-                command="npx",
-                args=["-y", "tavily-mcp"],
+                command="node",
                 env={"TAVILY_API_KEY": os.getenv('TAVILY_API_KEY')}
             )
 
