@@ -3,12 +3,16 @@
 import os
 import logging
 import asyncio
+import nest_asyncio
 from typing import Optional, Dict, Any, List
 from contextlib import AsyncExitStack
 from datetime import datetime
 from pathlib import Path
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+
+# Apply nest_asyncio to allow nested event loops
+nest_asyncio.apply()
 
 logger = logging.getLogger(__name__)
 
@@ -49,14 +53,9 @@ class MCPClient:
 
         try:
             logger.debug(f"Executing tool {tool_name} with parameters: {parameters}")
-            # Use asyncio.run in a new event loop
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                result = loop.run_until_complete(self.session.call_tool(tool_name, parameters))
-            finally:
-                loop.close()
-
+            # Call the async method without creating a new event loop
+            result = asyncio.run(self.session.call_tool(tool_name, parameters))
+            
             return {
                 'tool': tool_name,
                 'parameters': parameters,
@@ -82,14 +81,9 @@ class MCPClient:
 
         try:
             logger.debug(f"Reading resource: {uri}")
-            # Use asyncio.run in a new event loop
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                result = loop.run_until_complete(self.session.read_resource(uri))
-            finally:
-                loop.close()
-
+            # Call the async method without creating a new event loop
+            result = asyncio.run(self.session.read_resource(uri))
+            
             return {
                 'uri': uri,
                 'content': result.content,
@@ -115,14 +109,9 @@ class MCPClient:
 
         try:
             logger.debug(f"Getting prompt {prompt_name} with arguments: {arguments}")
-            # Use asyncio.run in a new event loop
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                result = loop.run_until_complete(self.session.get_prompt(prompt_name, arguments))
-            finally:
-                loop.close()
-
+            # Call the async method without creating a new event loop
+            result = asyncio.run(self.session.get_prompt(prompt_name, arguments))
+            
             return {
                 'prompt': prompt_name,
                 'arguments': arguments,

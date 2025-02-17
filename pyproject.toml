@@ -15,6 +15,7 @@ dependencies = [
     "httpx",
     "asyncio>=3.4.3",
     "instructor[anthropic]>=1.7.2",
+    "nest-asyncio>=1.6.0",
 ]
 
 [build-system]

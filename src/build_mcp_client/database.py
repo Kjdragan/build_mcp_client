@@ -120,7 +120,7 @@ class DatabaseManager:
         session_id: str,
         query: str,
         plan: Any,
-        results: Dict[str, Any],
+        results: Any,
         analysis: Any
     ):
         """
@@ -129,16 +129,17 @@ class DatabaseManager:
         Args:
             session_id (str): Session identifier
             query (str): Research query
-            plan (Any): Research plan (Pydantic model)
-            results (Dict[str, Any]): Research results
-            analysis (Any): Result analysis (Pydantic model)
+            plan (Any): Research plan (ResearchPlan model)
+            results (Any): Research results (ResearchResults model)
+            analysis (Any): Result analysis
             
         Raises:
             Exception: If save fails
         """
         try:
-            # Convert Pydantic models to dict for JSON serialization
+            # Convert models to dict for JSON serialization
             plan_dict = plan.model_dump() if hasattr(plan, 'model_dump') else plan
+            results_dict = results.model_dump() if hasattr(results, 'model_dump') else results
             analysis_dict = analysis.model_dump() if hasattr(analysis, 'model_dump') else analysis
             
             # Save research entry
@@ -146,8 +147,13 @@ class DatabaseManager:
                 'session_id': session_id,
                 'query': query,
                 'plan': plan_dict,
-                'results': results,
-                'analysis': analysis_dict
+                'results': results_dict,
+                'analysis': analysis_dict,
+                'metadata': {
+                    'timestamp': datetime.now().isoformat(),
+                    'success_count': getattr(results, 'success_count', 0),
+                    'failure_count': getattr(results, 'failure_count', 0)
+                }
             }
             
             self.client.table('research').insert(research_data).execute()
@@ -171,10 +177,10 @@ class DatabaseManager:
                 'last_query_time': datetime.now().isoformat(),
                 'query_count': current_metadata.get('query_count', 0) + 1,
                 'successful_queries': current_metadata.get('successful_queries', 0) + (
-                    1 if not results.get('error') else 0
+                    1 if not results.errors else 0
                 ),
                 'failed_queries': current_metadata.get('failed_queries', 0) + (
-                    1 if results.get('error') else 0
+                    1 if results.errors else 0
                 )
             }
             
