@@ -237,7 +237,7 @@ class MCPClient:
         """Clean up resources."""
         try:
             if self.session:
-                await self.session.close()
+                await self.session.aclose()
             await self.exit_stack.aclose()
             logger.info("Cleaned up MCP client resources")
         except Exception as e:

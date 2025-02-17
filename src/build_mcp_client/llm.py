@@ -1,12 +1,37 @@
 # llm.py
 
 import logging
-import json
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 from anthropic import Anthropic
+import instructor
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+
+class ResearchStep(BaseModel):
+    """A single step in a research plan."""
+    type: str = Field(..., description="Type of step (tool, resource, prompt)")
+    name: str = Field(..., description="Name of the capability to use")
+    parameters: Dict[str, Any] = Field(default_factory=dict, description="Parameters for the step")
+
+class ResearchPlan(BaseModel):
+    """A structured research plan."""
+    steps: List[ResearchStep] = Field(..., description="Steps to execute")
+    expected_outcomes: List[str] = Field(..., description="Expected outcomes from each step")
+    fallback_options: List[ResearchStep] = Field(default_factory=list, description="Fallback steps if primary steps fail")
+
+class ResearchQuality(BaseModel):
+    """Quality assessment of research results."""
+    score: int = Field(..., ge=0, le=100, description="Quality score from 0-100")
+    assessment: str = Field(..., description="Brief quality assessment")
+
+class ResearchAnalysis(BaseModel):
+    """Analysis of research results."""
+    findings: List[str] = Field(..., description="Key findings from the research")
+    quality: ResearchQuality = Field(..., description="Quality assessment")
+    gaps: List[str] = Field(..., description="Information gaps identified")
+    recommendations: List[str] = Field(..., description="Recommended next steps")
 
 class LLMOrchestrator:
     """Orchestrates LLM interactions with dynamic MCP capabilities."""
@@ -15,14 +40,19 @@ class LLMOrchestrator:
         if not api_key:
             raise ValueError("Anthropic API key is required")
             
-        self.client = Anthropic(api_key=api_key)
+        # Initialize Anthropic client with Instructor
+        anthropic = Anthropic(api_key=api_key)
+        self.client = instructor.from_anthropic(anthropic)
         self.current_session: Dict[str, Any] = {}
         logger.info("LLM Orchestrator initialized")
 
     def analyze_capabilities(self, capabilities: Dict[str, List[Dict[str, Any]]]) -> str:
         """Analyze available MCP capabilities."""
         try:
-            capabilities_desc = json.dumps(capabilities, indent=2)
+            capabilities_desc = "\n".join([
+                f"Tool: {tool['name']}\nDescription: {tool['description']}\n"
+                for tool in capabilities.get('tools', [])
+            ])
             
             response = self.client.messages.create(
                 model="claude-3-opus-20240229",
@@ -51,10 +81,11 @@ Explain:
             logger.error(f"Capability analysis failed: {e}")
             raise
 
-    def plan_research(self, query: str, capabilities: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
+    def plan_research(self, query: str, capabilities: Dict[str, List[Dict[str, Any]]]) -> ResearchPlan:
         """Plan research using available capabilities."""
         try:
-            response = self.client.messages.create(
+            # Create research plan using Instructor's structured output
+            return self.client.messages.create(
                 model="claude-3-opus-20240229",
                 max_tokens=1000,
                 messages=[{
@@ -62,41 +93,33 @@ Explain:
                     "content": f"""Research query: {query}
 
 Available MCP capabilities:
-{json.dumps(capabilities, indent=2)}
+{str(capabilities)}
 
-Create a research plan that:
-1. Identifies which capabilities would be useful
-2. Explains how to use them effectively
-3. Specifies the order of operations
-4. Includes any required parameters
-
-Return the plan as JSON with:
-- steps: Array of actions to take (tool/resource/prompt usage)
-- parameters: Parameters for each step
-- expected_outcomes: What each step should produce
-- fallback_options: Alternative approaches if steps fail"""
-                }]
+Create a research plan that uses these capabilities effectively."""
+                }],
+                response_model=ResearchPlan
             )
-            
-            # Parse JSON from the response text
-            if response.content and len(response.content) > 0:
-                try:
-                    return json.loads(response.content[0].text)
-                except json.JSONDecodeError:
-                    logger.error("Failed to parse JSON from response")
-                    return {
-                        "error": "Invalid JSON response",
-                        "raw_response": response.content[0].text
-                    }
-            return {
-                "error": "No response content available"
-            }
             
         except Exception as e:
             logger.error(f"Research planning failed: {e}")
-            raise
+            # Return a basic fallback plan
+            return ResearchPlan(
+                steps=[
+                    ResearchStep(
+                        type="tool",
+                        name="tavily-search",
+                        parameters={
+                            "query": query,
+                            "search_depth": "basic",
+                            "max_results": 5
+                        }
+                    )
+                ],
+                expected_outcomes=["Basic search results for the query"],
+                fallback_options=[]
+            )
 
-    def execute_research_plan(self, plan: Dict[str, Any], mcp_client: Any) -> Dict[str, Any]:
+    def execute_research_plan(self, plan: ResearchPlan, mcp_client: Any) -> Dict[str, Any]:
         """Execute a research plan using available capabilities."""
         results = {
             'steps': [],
@@ -109,31 +132,31 @@ Return the plan as JSON with:
         }
         
         try:
-            for step in plan.get('steps', []):
+            for step in plan.steps:
                 step_result = {
-                    'step': step,
+                    'step': step.dict(),
                     'status': 'pending',
                     'start_time': datetime.now().isoformat()
                 }
                 
                 try:
-                    if step['type'] == 'tool':
+                    if step.type == 'tool':
                         result = mcp_client.execute_tool_sync(
-                            step['name'],
-                            step['parameters']
+                            step.name,
+                            step.parameters
                         )
                         step_result['data'] = result
                         
-                    elif step['type'] == 'resource':
+                    elif step.type == 'resource':
                         result = mcp_client.read_resource_sync(
-                            step['uri']
+                            step.parameters.get('uri')
                         )
                         step_result['data'] = result
                         
-                    elif step['type'] == 'prompt':
+                    elif step.type == 'prompt':
                         result = mcp_client.get_prompt_sync(
-                            step['name'],
-                            step['arguments']
+                            step.name,
+                            step.parameters
                         )
                         step_result['data'] = result
                         
@@ -148,10 +171,16 @@ Return the plan as JSON with:
                     results['metadata']['failure_count'] += 1
                     
                     # Try fallback if available
-                    if step.get('fallback'):
+                    matching_fallbacks = [
+                        f for f in plan.fallback_options 
+                        if f.type == step.type and f.name != step.name
+                    ]
+                    
+                    if matching_fallbacks:
                         try:
+                            fallback = matching_fallbacks[0]
                             fallback_result = self.execute_fallback(
-                                step['fallback'],
+                                fallback,
                                 mcp_client
                             )
                             step_result['fallback_data'] = fallback_result
@@ -170,10 +199,11 @@ Return the plan as JSON with:
             logger.error(f"Research execution failed: {e}")
             raise
 
-    def analyze_results(self, results: Dict[str, Any]) -> Dict[str, Any]:
+    def analyze_results(self, results: Dict[str, Any]) -> ResearchAnalysis:
         """Analyze research results."""
         try:
-            response = self.client.messages.create(
+            # Analyze results using Instructor's structured output
+            return self.client.messages.create(
                 model="claude-3-opus-20240229",
                 max_tokens=2000,
                 messages=[{
@@ -181,59 +211,43 @@ Return the plan as JSON with:
                     "content": f"""Analyze these research results:
 
 Results:
-{json.dumps(results, indent=2)}
+{str(results)}
 
-Provide:
-1. Key findings and insights
-2. Success/failure analysis
-3. Data quality assessment
-4. Suggestions for improvement
-5. Additional research needs
-
-Format as JSON with:
-- findings: Array of key findings
-- quality: Data quality assessment
-- gaps: Information gaps identified
-- recommendations: Suggested next steps"""
-                }]
+Provide a detailed analysis including key findings, quality assessment, gaps, and recommendations."""
+                }],
+                response_model=ResearchAnalysis
             )
-            
-            # Parse JSON from the response text
-            if response.content and len(response.content) > 0:
-                try:
-                    return json.loads(response.content[0].text)
-                except json.JSONDecodeError:
-                    logger.error("Failed to parse JSON from response")
-                    return {
-                        "error": "Invalid JSON response",
-                        "raw_response": response.content[0].text
-                    }
-            return {
-                "error": "No response content available"
-            }
             
         except Exception as e:
             logger.error(f"Results analysis failed: {e}")
-            raise
+            return ResearchAnalysis(
+                findings=["Analysis failed due to an error"],
+                quality=ResearchQuality(
+                    score=0,
+                    assessment="Analysis failed: " + str(e)
+                ),
+                gaps=["Complete analysis not available"],
+                recommendations=["Retry analysis with simplified results"]
+            )
 
-    def execute_fallback(self, fallback: Dict[str, Any], mcp_client: Any) -> Any:
+    def execute_fallback(self, fallback: ResearchStep, mcp_client: Any) -> Any:
         """Execute a fallback action."""
-        if fallback['type'] == 'tool':
+        if fallback.type == 'tool':
             return mcp_client.execute_tool_sync(
-                fallback['name'],
-                fallback['parameters']
+                fallback.name,
+                fallback.parameters
             )
-        elif fallback['type'] == 'resource':
+        elif fallback.type == 'resource':
             return mcp_client.read_resource_sync(
-                fallback['uri']
+                fallback.parameters.get('uri')
             )
-        elif fallback['type'] == 'prompt':
+        elif fallback.type == 'prompt':
             return mcp_client.get_prompt_sync(
-                fallback['name'],
-                fallback['arguments']
+                fallback.name,
+                fallback.parameters
             )
         else:
-            raise ValueError(f"Unknown fallback type: {fallback['type']}")
+            raise ValueError(f"Unknown fallback type: {fallback.type}")
 
     def get_session_summary(self) -> Dict[str, Any]:
         """Get summary of current research session."""

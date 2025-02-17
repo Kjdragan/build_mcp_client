@@ -2,6 +2,7 @@
 
 import os
 import sys
+import asyncio
 import logging
 from typing import Optional, Dict, Any
 from datetime import datetime
@@ -51,7 +52,7 @@ class ResearchConsole:
             'summary': (self.show_summary, 'Show research summary')
         }
 
-    def initialize(self) -> bool:
+    async def async_initialize(self) -> bool:
         """Initialize components and discover capabilities."""
         try:
             # Load environment variables
@@ -78,13 +79,13 @@ class ResearchConsole:
 
             # Connect to MCP server and discover capabilities
             logger.info("Connecting to MCP server...")
-            self.client.connect_to_server_sync(
+            await self.client.connect_to_server(
                 command="node",
                 env={"TAVILY_API_KEY": os.getenv('TAVILY_API_KEY')}
             )
 
             # Discover and analyze capabilities
-            self.capabilities = self.client.discover_capabilities_sync()
+            self.capabilities = await self.client.discover_capabilities()
             self.capability_analysis = self.llm.analyze_capabilities(self.capabilities)
 
             # Initialize database
@@ -101,47 +102,51 @@ class ResearchConsole:
             logger.error(f"Initialization failed: {e}")
             return False
 
-    def run(self):
-        """Run the main console loop."""
-        try:
-            if not self.initialize():
-                return
-                
-            print("\nResearch Console Initialized")
-            print("Type 'help' for available commands")
-            
-            while True:
-                try:
-                    command = input("\nEnter command: ").strip().lower()
-                    
-                    if not command:
-                        continue
-                        
-                    if command in self.commands:
-                        self.commands[command][0]()
-                    else:
-                        print(f"Unknown command: {command}")
-                        print("Type 'help' for available commands")
-                        
-                except KeyboardInterrupt:
-                    print("\nUse 'quit' to exit")
-                except Exception as e:
-                    logger.error(f"Command execution failed: {e}")
-                    print(f"Error: {e}")
-                    
-        finally:
-            self.cleanup()
-
-    def cleanup(self):
+    async def async_cleanup(self):
         """Clean up resources."""
         try:
             if self.client:
-                self.client.cleanup()
+                await self.client.cleanup()
             if self.db:
                 self.db.cleanup()
             logger.info("Cleanup completed")
         except Exception as e:
             logger.error(f"Cleanup failed: {e}")
+
+    def run(self):
+        """Run the main console loop."""
+        async def async_run():
+            try:
+                if not await self.async_initialize():
+                    return
+                    
+                print("\nResearch Console Initialized")
+                print("Type 'help' for available commands")
+                
+                while True:
+                    try:
+                        command = input("\nEnter command: ").strip().lower()
+                        
+                        if not command:
+                            continue
+                            
+                        if command in self.commands:
+                            self.commands[command][0]()
+                        else:
+                            print(f"Unknown command: {command}")
+                            print("Type 'help' for available commands")
+                            
+                    except KeyboardInterrupt:
+                        print("\nUse 'quit' to exit")
+                    except Exception as e:
+                        logger.error(f"Command execution failed: {e}")
+                        print(f"Error: {e}")
+                        
+            finally:
+                await self.async_cleanup()
+
+        # Run the async event loop
+        asyncio.run(async_run())
 
     def show_help(self):
         """Show available commands."""
