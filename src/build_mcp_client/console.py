@@ -2,7 +2,6 @@
 
 import os
 import sys
-import asyncio
 import logging
 from typing import Optional, Dict, Any
 from datetime import datetime
@@ -52,7 +51,7 @@ class ResearchConsole:
             'summary': (self.show_summary, 'Show research summary')
         }
 
-    async def initialize(self) -> bool:
+    def initialize(self) -> bool:
         """Initialize components and discover capabilities."""
         try:
             # Load environment variables
@@ -79,18 +78,21 @@ class ResearchConsole:
 
             # Connect to MCP server and discover capabilities
             logger.info("Connecting to MCP server...")
-            await self.client.connect_to_server(
+            self.client.connect_to_server_sync(
                 command="node",
                 env={"TAVILY_API_KEY": os.getenv('TAVILY_API_KEY')}
             )
 
             # Discover and analyze capabilities
-            self.capabilities = await self.client.discover_capabilities()
-            self.capability_analysis = await self.llm.analyze_capabilities(self.capabilities)
+            self.capabilities = self.client.discover_capabilities_sync()
+            self.capability_analysis = self.llm.analyze_capabilities(self.capabilities)
 
             # Initialize database
             logger.info("Connecting to database...")
-            await self.db.initialize()
+            self.db.initialize()
+
+            # Create initial session
+            self.current_session_id = self.db.create_session(self.capabilities)
 
             logger.info("Initialization complete")
             return True
@@ -99,292 +101,243 @@ class ResearchConsole:
             logger.error(f"Initialization failed: {e}")
             return False
 
-    async def run(self):
-        """Main console loop."""
-        print("\nResearch Console")
-        print("Type 'help' for commands, 'quit' to exit")
-        print("\nDiscovered Capabilities:")
-        print(f"- Tools: {len(self.capabilities.get('tools', []))}")
-        print(f"- Resources: {len(self.capabilities.get('resources', []))}")
-        print(f"- Prompts: {len(self.capabilities.get('prompts', []))}")
-
-        while True:
-            try:
-                command = input("\n> ").strip()
-                if not command:
-                    continue
-
-                # Parse command and arguments
-                parts = command.split(maxsplit=1)
-                cmd = parts[0].lower()
-                args = parts[1] if len(parts) > 1 else ""
-
-                # Execute command
-                if cmd in self.commands:
-                    handler, _ = self.commands[cmd]
-                    if cmd == 'quit':
-                        if await handler(args):
-                            break
-                    else:
-                        await handler(args)
-                else:
-                    print(f"Unknown command: {cmd}")
-                    print("Type 'help' for available commands")
-
-            except KeyboardInterrupt:
-                print("\nUse 'quit' to exit")
-            except Exception as e:
-                logger.error(f"Error processing command: {e}")
-                print(f"Error: {str(e)}")
-
-    async def cleanup(self):
-        """Clean up resources and connections."""
+    def run(self):
+        """Run the main console loop."""
         try:
-            if self.current_session_id:
-                await self.save_results()
-
-            if self.client:
-                await self.client.cleanup()
-            if self.db:
-                await self.db.cleanup()
+            if not self.initialize():
+                return
+                
+            print("\nResearch Console Initialized")
+            print("Type 'help' for available commands")
             
+            while True:
+                try:
+                    command = input("\nEnter command: ").strip().lower()
+                    
+                    if not command:
+                        continue
+                        
+                    if command in self.commands:
+                        self.commands[command][0]()
+                    else:
+                        print(f"Unknown command: {command}")
+                        print("Type 'help' for available commands")
+                        
+                except KeyboardInterrupt:
+                    print("\nUse 'quit' to exit")
+                except Exception as e:
+                    logger.error(f"Command execution failed: {e}")
+                    print(f"Error: {e}")
+                    
+        finally:
+            self.cleanup()
+
+    def cleanup(self):
+        """Clean up resources."""
+        try:
+            if self.client:
+                self.client.cleanup()
+            if self.db:
+                self.db.cleanup()
             logger.info("Cleanup completed")
         except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
+            logger.error(f"Cleanup failed: {e}")
 
-    async def show_help(self, args: str = ""):
-        """Display available commands."""
-        print("\nAvailable Commands:")
+    def show_help(self):
+        """Show available commands."""
+        print("\nAvailable commands:")
         for cmd, (_, desc) in self.commands.items():
-            print(f"  {cmd:<12} - {desc}")
+            print(f"  {cmd:12} - {desc}")
 
-    async def show_capabilities(self, args: str = ""):
-        """Display available MCP capabilities."""
-        print("\nAvailable Capabilities:")
-        
-        print("\nTools:")
-        for tool in self.capabilities.get('tools', []):
-            print(f"\n{tool['name']}:")
-            print(f"  Description: {tool['description']}")
-            if tool.get('schema'):
-                print("  Parameters:")
-                for param, details in tool['schema'].get('properties', {}).items():
-                    print(f"    - {param}: {details.get('description', 'No description')}")
+    def quit(self):
+        """Exit the program."""
+        print("\nExiting...")
+        sys.exit(0)
 
-        print("\nResources:")
-        for resource in self.capabilities.get('resources', []):
-            print(f"\n{resource['name']}:")
-            print(f"  URI: {resource['uri']}")
-            print(f"  Description: {resource['description']}")
-
-        print("\nPrompts:")
-        for prompt in self.capabilities.get('prompts', []):
-            print(f"\n{prompt['name']}:")
-            print(f"  Description: {prompt['description']}")
-            if prompt.get('arguments'):
-                print("  Arguments:")
-                for arg in prompt['arguments']:
-                    print(f"    - {arg['name']}: {arg.get('description', 'No description')}")
-
-        if self.capability_analysis:
-            print("\nCapability Analysis:")
-            print(self.capability_analysis)
-
-    async def search(self, query: str):
-        """Execute a research query using available capabilities."""
-        if not query:
-            print("\nError: Please provide a search query")
-            return
-
+    def show_status(self):
+        """Show current session status."""
         if not self.current_session_id:
-            self.current_session_id = await self.db.create_session()
-
+            print("No active session")
+            return
+            
         try:
-            print("\nPlanning research approach...")
-            plan = await self.llm.plan_research(query, self.capabilities)
+            status = self.db.get_session_status(self.current_session_id)
+            print("\nCurrent Session Status:")
+            print(f"  Queries: {status['query_count']}")
+            print(f"  Success Rate: {status['success_rate']}%")
+            print(f"  Last Update: {status['last_update']}")
+            print("\nAvailable Capabilities:")
+            print(f"  Tools: {status['capabilities']['tools']}")
+            print(f"  Resources: {status['capabilities']['resources']}")
+            print(f"  Prompts: {status['capabilities']['prompts']}")
+        except Exception as e:
+            logger.error(f"Failed to get status: {e}")
+            print("Error retrieving status")
+
+    def show_capabilities(self):
+        """Show available MCP capabilities."""
+        if not self.capabilities:
+            print("No capabilities discovered")
+            return
             
-            print("\nExecuting research plan...")
-            results = await self.llm.execute_research_plan(plan, self.client)
+        print("\nAvailable Capabilities:")
+        print("\nTools:")
+        for tool in self.capabilities['tools']:
+            print(f"  {tool['name']}")
+            print(f"    {tool['description']}")
             
-            print("\nAnalyzing results...")
-            analysis = await self.llm.analyze_results(results)
+        if self.capabilities['resources']:
+            print("\nResources:")
+            for resource in self.capabilities['resources']:
+                print(f"  {resource['name']}")
+                print(f"    {resource['description']}")
+                
+        if self.capabilities['prompts']:
+            print("\nPrompts:")
+            for prompt in self.capabilities['prompts']:
+                print(f"  {prompt['name']}")
+                print(f"    {prompt['description']}")
+
+    def search(self):
+        """Perform a research search."""
+        if not self.current_session_id:
+            print("No active session")
+            return
+            
+        query = input("Enter search query: ").strip()
+        if not query:
+            print("Empty query")
+            return
+            
+        try:
+            # Plan research
+            plan = self.llm.plan_research(query, self.capabilities)
+            
+            # Execute plan
+            results = self.llm.execute_research_plan(plan, self.client)
+            
+            # Analyze results
+            analysis = self.llm.analyze_results(results)
             
             # Save results
-            await self.db.save_research_results(
+            self.db.save_research_results(
                 self.current_session_id,
                 query,
+                plan,
                 results,
                 analysis
             )
             
-            print("\nResearch Results:")
-            print(f"Steps completed: {results['metadata']['success_count']}")
-            print(f"Steps failed: {results['metadata']['failure_count']}")
-            
-            print("\nKey Findings:")
-            for finding in analysis.get('findings', []):
-                print(f"- {finding}")
-                
-            if analysis.get('gaps'):
-                print("\nInformation Gaps:")
-                for gap in analysis['gaps']:
-                    print(f"- {gap}")
+            # Show summary
+            print("\nSearch Results:")
+            if 'findings' in analysis:
+                print("\nKey Findings:")
+                for finding in analysis['findings']:
+                    print(f"  - {finding}")
                     
-            if analysis.get('recommendations'):
-                print("\nRecommended Next Steps:")
+            if 'recommendations' in analysis:
+                print("\nRecommendations:")
                 for rec in analysis['recommendations']:
-                    print(f"- {rec}")
-
-        except Exception as e:
-            logger.error(f"Research error: {e}")
-            print(f"\nError performing research: {str(e)}")
-
-    async def analyze(self, topic: str):
-        """Analyze research results for a specific topic."""
-        if not self.current_session_id:
-            print("\nError: No active session to analyze")
-            return
-
-        if not topic:
-            print("\nError: Please specify an analysis topic")
-            return
-
-        try:
-            print("\nRetrieving session data...")
-            session_data = await self.db.get_session_data(self.current_session_id)
-            
-            print("\nAnalyzing research data...")
-            analysis = await self.llm.analyze_research(session_data, topic)
-            
-            await self.db.save_analysis(
-                self.current_session_id,
-                topic,
-                analysis
-            )
-            
-            print("\nAnalysis Results:")
-            for section, content in analysis.items():
-                if isinstance(content, list):
-                    print(f"\n{section.title()}:")
-                    for item in content:
-                        print(f"- {item}")
-                else:
-                    print(f"\n{section.title()}: {content}")
-
-        except Exception as e:
-            logger.error(f"Analysis error: {e}")
-            print(f"\nError performing analysis: {str(e)}")
-
-    async def save_results(self, args: str = ""):
-        """Save current session results."""
-        if not self.current_session_id:
-            print("\nNo active session to save")
-            return
-
-        try:
-            await self.db.save_session(self.current_session_id)
-            print(f"\nSession {self.current_session_id} saved successfully")
-        except Exception as e:
-            logger.error(f"Save error: {e}")
-            print(f"\nError saving session: {str(e)}")
-
-    async def load_session(self, session_id: str):
-        """Load a previous session."""
-        if not session_id:
-            print("\nError: Please provide a session ID")
-            return
-
-        try:
-            if await self.db.session_exists(session_id):
-                self.current_session_id = session_id
-                print(f"\nLoaded session {session_id}")
-                await self.show_status("")
-            else:
-                print(f"\nSession {session_id} not found")
-        except Exception as e:
-            logger.error(f"Load error: {e}")
-            print(f"\nError loading session: {str(e)}")
-
-    async def show_status(self, args: str = ""):
-        """Display current session and capability status."""
-        print("\nSystem Status:")
-        print("MCP Capabilities:")
-        print(f"- Tools: {len(self.capabilities.get('tools', []))}")
-        print(f"- Resources: {len(self.capabilities.get('resources', []))}")
-        print(f"- Prompts: {len(self.capabilities.get('prompts', []))}")
-
-        if self.current_session_id:
-            status = await self.db.get_session_status(self.current_session_id)
-            print("\nCurrent Session:")
-            print(f"Session ID: {self.current_session_id}")
-            print(f"Queries: {status['query_count']}")
-            print(f"Results: {status['result_count']}")
-            print(f"Last Updated: {status['last_updated']}")
-        else:
-            print("\nNo active session")
-
-    async def show_summary(self, args: str = ""):
-        """Show research session summary."""
-        if not self.current_session_id:
-            print("\nNo active session")
-            return
-
-        try:
-            summary = await self.db.get_session_summary(self.current_session_id)
-            print("\nResearch Summary:")
-            print(f"Total Queries: {summary['query_count']}")
-            print(f"Successful Searches: {summary['successful_searches']}")
-            print(f"Failed Searches: {summary['failed_searches']}")
-            
-            if summary.get('key_findings'):
-                print("\nTop Findings:")
-                for finding in summary['key_findings']:
-                    print(f"- {finding}")
+                    print(f"  - {rec}")
                     
-            if summary.get('gaps'):
-                print("\nIdentified Gaps:")
-                for gap in summary['gaps']:
-                    print(f"- {gap}")
-
         except Exception as e:
-            logger.error(f"Summary error: {e}")
-            print(f"\nError generating summary: {str(e)}")
+            logger.error(f"Search failed: {e}")
+            print(f"Error: {e}")
 
-    async def clear_session(self, args: str = ""):
-        """Clear current session."""
+    def analyze(self):
+        """Analyze collected research."""
         if not self.current_session_id:
-            print("\nNo active session to clear")
+            print("No active session")
             return
+            
+        try:
+            data = self.db.get_session_data(self.current_session_id)
+            
+            print("\nResearch Analysis:")
+            print(f"Total Queries: {len(data['research'])}")
+            
+            if data['research']:
+                print("\nRecent Queries:")
+                for entry in data['research'][:5]:
+                    print(f"\n{entry['query']}")
+                    if 'findings' in entry['analysis']:
+                        print("Findings:")
+                        for finding in entry['analysis']['findings']:
+                            print(f"  - {finding}")
+                            
+        except Exception as e:
+            logger.error(f"Analysis failed: {e}")
+            print(f"Error: {e}")
 
-        confirm = input("\nThis will clear the current session. Continue? (y/n): ").lower()
-        if confirm == 'y':
-            self.current_session_id = None
-            print("\nSession cleared")
+    def save_results(self):
+        """Save current session."""
+        if not self.current_session_id:
+            print("No active session")
+            return
+            
+        try:
+            self.db.save_session(self.current_session_id)
+            print("Session saved successfully")
+        except Exception as e:
+            logger.error(f"Save failed: {e}")
+            print(f"Error: {e}")
 
-    async def quit(self, args: str = "") -> bool:
-        """Handle program exit."""
-        if self.current_session_id:
-            confirm = input("\nSave current session before quitting? (y/n): ").lower()
-            if confirm == 'y':
-                await self.save_results()
-        return True
+    def load_session(self):
+        """Load a previous session."""
+        session_id = input("Enter session ID: ").strip()
+        if not session_id:
+            print("Empty session ID")
+            return
+            
+        try:
+            if not self.db.session_exists(session_id):
+                print("Session not found")
+                return
+                
+            self.current_session_id = session_id
+            print("Session loaded successfully")
+            
+        except Exception as e:
+            logger.error(f"Load failed: {e}")
+            print(f"Error: {e}")
 
-async def main():
+    def clear_session(self):
+        """Clear current session."""
+        self.current_session_id = None
+        print("Session cleared")
+
+    def show_summary(self):
+        """Show research summary."""
+        if not self.current_session_id:
+            print("No active session")
+            return
+            
+        try:
+            summary = self.db.get_session_summary(self.current_session_id)
+            
+            print("\nSession Summary:")
+            print(f"Total Queries: {summary['query_count']}")
+            print(f"Success Rate: {summary['success_rate']}%")
+            
+            if summary.get('top_findings'):
+                print("\nKey Findings:")
+                for finding in summary['top_findings']:
+                    print(f"  - {finding}")
+                    
+            if summary.get('recommendations'):
+                print("\nRecommendations:")
+                for rec in summary['recommendations']:
+                    print(f"  - {rec}")
+                    
+        except Exception as e:
+            logger.error(f"Summary generation failed: {e}")
+            print(f"Error: {e}")
+
+def main():
     """Main entry point for the research console."""
+    print("\nInitializing Research Console...")
     console = ResearchConsole()
-    
-    try:
-        print("\nInitializing Research Console...")
-        if await console.initialize():
-            await console.run()
-        else:
-            print("\nInitialization failed. Please check logs for details.")
-    except Exception as e:
-        logger.error(f"Fatal error: {e}")
-        print(f"\nFatal error: {str(e)}")
-    finally:
-        await console.cleanup()
-        print("\nSession ended.")
+    console.run()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

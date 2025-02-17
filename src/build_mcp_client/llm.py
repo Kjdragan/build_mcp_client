@@ -5,7 +5,6 @@ import json
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 from anthropic import Anthropic
-import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -20,12 +19,12 @@ class LLMOrchestrator:
         self.current_session: Dict[str, Any] = {}
         logger.info("LLM Orchestrator initialized")
 
-    async def analyze_capabilities(self, capabilities: Dict[str, List[Dict[str, Any]]]) -> str:
+    def analyze_capabilities(self, capabilities: Dict[str, List[Dict[str, Any]]]) -> str:
         """Analyze available MCP capabilities."""
         try:
             capabilities_desc = json.dumps(capabilities, indent=2)
             
-            response = await asyncio.to_thread(lambda: self.client.messages.create(
+            response = self.client.messages.create(
                 model="claude-3-opus-20240229",
                 max_tokens=1000,
                 messages=[{
@@ -41,7 +40,7 @@ Explain:
 3. Any limitations or gaps
 4. Best practices for usage"""
                 }]
-            ))
+            )
             
             # Extract text from the response content
             if response.content and len(response.content) > 0:
@@ -52,10 +51,10 @@ Explain:
             logger.error(f"Capability analysis failed: {e}")
             raise
 
-    async def plan_research(self, query: str, capabilities: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
+    def plan_research(self, query: str, capabilities: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
         """Plan research using available capabilities."""
         try:
-            response = await asyncio.to_thread(lambda: self.client.messages.create(
+            response = self.client.messages.create(
                 model="claude-3-opus-20240229",
                 max_tokens=1000,
                 messages=[{
@@ -77,7 +76,7 @@ Return the plan as JSON with:
 - expected_outcomes: What each step should produce
 - fallback_options: Alternative approaches if steps fail"""
                 }]
-            ))
+            )
             
             # Parse JSON from the response text
             if response.content and len(response.content) > 0:
@@ -97,7 +96,7 @@ Return the plan as JSON with:
             logger.error(f"Research planning failed: {e}")
             raise
 
-    async def execute_research_plan(self, plan: Dict[str, Any], mcp_client: Any) -> Dict[str, Any]:
+    def execute_research_plan(self, plan: Dict[str, Any], mcp_client: Any) -> Dict[str, Any]:
         """Execute a research plan using available capabilities."""
         results = {
             'steps': [],
@@ -119,20 +118,20 @@ Return the plan as JSON with:
                 
                 try:
                     if step['type'] == 'tool':
-                        result = await mcp_client.execute_tool(
+                        result = mcp_client.execute_tool_sync(
                             step['name'],
                             step['parameters']
                         )
                         step_result['data'] = result
                         
                     elif step['type'] == 'resource':
-                        result = await mcp_client.read_resource(
+                        result = mcp_client.read_resource_sync(
                             step['uri']
                         )
                         step_result['data'] = result
                         
                     elif step['type'] == 'prompt':
-                        result = await mcp_client.get_prompt(
+                        result = mcp_client.get_prompt_sync(
                             step['name'],
                             step['arguments']
                         )
@@ -151,7 +150,7 @@ Return the plan as JSON with:
                     # Try fallback if available
                     if step.get('fallback'):
                         try:
-                            fallback_result = await self.execute_fallback(
+                            fallback_result = self.execute_fallback(
                                 step['fallback'],
                                 mcp_client
                             )
@@ -171,10 +170,10 @@ Return the plan as JSON with:
             logger.error(f"Research execution failed: {e}")
             raise
 
-    async def analyze_results(self, results: Dict[str, Any]) -> Dict[str, Any]:
+    def analyze_results(self, results: Dict[str, Any]) -> Dict[str, Any]:
         """Analyze research results."""
         try:
-            response = await asyncio.to_thread(lambda: self.client.messages.create(
+            response = self.client.messages.create(
                 model="claude-3-opus-20240229",
                 max_tokens=2000,
                 messages=[{
@@ -197,7 +196,7 @@ Format as JSON with:
 - gaps: Information gaps identified
 - recommendations: Suggested next steps"""
                 }]
-            ))
+            )
             
             # Parse JSON from the response text
             if response.content and len(response.content) > 0:
@@ -217,19 +216,19 @@ Format as JSON with:
             logger.error(f"Results analysis failed: {e}")
             raise
 
-    async def execute_fallback(self, fallback: Dict[str, Any], mcp_client: Any) -> Any:
+    def execute_fallback(self, fallback: Dict[str, Any], mcp_client: Any) -> Any:
         """Execute a fallback action."""
         if fallback['type'] == 'tool':
-            return await mcp_client.execute_tool(
+            return mcp_client.execute_tool_sync(
                 fallback['name'],
                 fallback['parameters']
             )
         elif fallback['type'] == 'resource':
-            return await mcp_client.read_resource(
+            return mcp_client.read_resource_sync(
                 fallback['uri']
             )
         elif fallback['type'] == 'prompt':
-            return await mcp_client.get_prompt(
+            return mcp_client.get_prompt_sync(
                 fallback['name'],
                 fallback['arguments']
             )

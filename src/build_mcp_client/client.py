@@ -2,6 +2,7 @@
 
 import os
 import logging
+import asyncio
 from typing import Optional, Dict, Any, List
 from contextlib import AsyncExitStack
 from datetime import datetime
@@ -25,6 +26,30 @@ class MCPClient:
             'prompts': []
         }
         self.transport = None
+        
+    def connect_to_server_sync(self, command: str = "node", args: Optional[List[str]] = None, env: Optional[Dict[str, str]] = None):
+        """Synchronous version of connect_to_server."""
+        return asyncio.run(self.connect_to_server(command, args, env))
+
+    def discover_capabilities_sync(self) -> Dict[str, List[Dict[str, Any]]]:
+        """Synchronous version of discover_capabilities."""
+        return asyncio.run(self.discover_capabilities())
+
+    def execute_tool_sync(self, tool_name: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
+        """Synchronous version of execute_tool."""
+        return asyncio.run(self.execute_tool(tool_name, parameters))
+
+    def read_resource_sync(self, uri: str) -> Dict[str, Any]:
+        """Synchronous version of read_resource."""
+        return asyncio.run(self.read_resource(uri))
+
+    def get_prompt_sync(self, prompt_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Synchronous version of get_prompt."""
+        return asyncio.run(self.get_prompt(prompt_name, arguments))
+
+    def cleanup_sync(self):
+        """Synchronous version of cleanup."""
+        return asyncio.run(self.cleanup())
         
     async def discover_capabilities(self) -> Dict[str, List[Dict[str, Any]]]:
         """Discover all available MCP capabilities."""
@@ -200,20 +225,21 @@ class MCPClient:
             return {
                 'prompt': prompt_name,
                 'arguments': arguments,
-                'result': result,
+                'result': result.content,
                 'timestamp': datetime.now().isoformat()
             }
             
         except Exception as e:
-            logger.error(f"Prompt execution failed: {e}")
+            logger.error(f"Prompt retrieval failed: {e}")
             raise
 
     async def cleanup(self):
         """Clean up resources."""
         try:
             if self.session:
-                await self.exit_stack.aclose()
-                logger.info("Cleaned up MCP client resources")
+                await self.session.close()
+            await self.exit_stack.aclose()
+            logger.info("Cleaned up MCP client resources")
         except Exception as e:
             logger.error(f"Cleanup failed: {e}")
             raise
